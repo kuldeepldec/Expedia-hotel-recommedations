@@ -1,0 +1,177 @@
+import pandas as pd
+import numpy as np
+import operator
+import ml_metrics as metrics
+from sklearn.decomposition import PCA
+from sklearn.base import TransformerMixin
+from sklearn.cross_validation import train_test_split
+
+
+class DataFrameImputer(TransformerMixin):
+
+    def __init__(self):
+        """Impute missing values.
+
+        Columns of dtype object are imputed with the most frequent value 
+        in column.
+
+        Columns of other types are imputed with mean of column.
+
+        """
+    def fit(self, X, y=None):
+
+        self.fill = pd.Series([X[c].value_counts().index[0]
+            if X[c].dtype == np.dtype('O') else X[c].mean() for c in X],
+            index=X.columns)
+
+        return self
+
+    def transform(self, X, y=None):
+        return X.fillna(self.fill)
+
+
+''' remove unwanted columns in training data generate
+stay span data and put miising value'''
+def training_data(df):
+    df["srch_ci"] = pd.to_datetime(df["srch_ci"], format='%Y-%m-%d')
+    df["srch_co"] = pd.to_datetime(df["srch_co"], format='%Y-%m-%d')
+    df["stay_span"] = (df["srch_co"] - df["srch_ci"]).astype('timedelta64[h]')
+    
+    df=df.drop(df.columns[[0,8,9,10,11,12,13,14,15,19]], axis=1)
+    #calling function for missing value
+    df = DataFrameImputer().fit_transform(df)
+    
+  
+    return df
+    
+   
+def make_key(items):
+    return "_".join([str(i) for i in items])
+
+#generate matches for matching cluster
+def generate_exact_matches(row, match_cols):
+    index = tuple([row[t] for t in match_cols])
+    try:
+        group = groups.get_group(index)
+    except Exception:
+        return []
+    clus = list(set(group.hotel_cluster))
+    return clus
+
+# matching training and validation data
+def f5(seq, idfun=None): 
+    if idfun is None:
+        def idfun(x): return x
+    seen = {}
+    result = []
+    for item in seq:
+        marker = idfun(item)
+        if marker in seen: continue
+        seen[marker] = 1
+        result.append(item)
+    return result
+
+
+if __name__=="__main__":
+    destinations = pd.read_csv("destinations.csv")
+    #reading destination file
+    train = pd.read_csv("train1.csv")
+    #reading train data 
+    ct=training_data(train)
+    
+    pca = PCA(n_components=3)
+    #using pca to generate new data of destination
+    dest_small = pca.fit_transform(destinations[["d{0}".format(i + 1) for i in range(149)]])
+    dest_small = pd.DataFrame(dest_small)
+    dest_small["srch_destination_id"] = destinations["srch_destination_id"]
+    ct = ct.join(dest_small, on="srch_destination_id", how='left', rsuffix="dest")
+    #joining destination data with main data
+    
+    ct=ct.dropna()
+    #removing all na values in data.
+    
+    
+    ct.columns=['site_name', 'posa_continent', 'user_location_country','user_location_region'
+,'user_location_city','orig_destination_distance','user_id','srch_destination_id','srch_destination_type_id','is_booking','hotel_continent','hotel_country','hotel_market','hotel_cluster','stay_span', 'dest1','dest2', 'dest3','srch_destination']
+    # namiming all columns again after removing unwanted data
+
+
+
+
+    train,test_t = train_test_split(ct, test_size = 0.20)
+    #dividing data into two parts train and test data
+    
+    test_t = test_t[test_t.is_booking == True]
+    #removing all the click data from test data
+    match_cols = ['dest1','dest2','dest3','srch_destination']
+    
+    #combining features to match with cluster data
+    cluster_cols = match_cols + ['hotel_cluster']
+    groups = train.groupby(cluster_cols)
+    
+    top_clusters = {}
+    
+    ''' in train data click and booking both data are important so click data is given
+        weightage of 10% while booking is given weightage of 100%'''
+    for name, group in groups:
+        clicks = len(group.is_booking[group.is_booking == False])
+        bookings = len(group.is_booking[group.is_booking == True])
+        score = bookings + .10 * clicks
+        clus_name = make_key(name[:len(match_cols)])
+        if clus_name not in top_clusters:
+            top_clusters[clus_name] = {}
+        top_clusters[clus_name][name[-1]] = score
+
+    #sorting top 5 clusters from the above cluster
+    cluster_dict = {}
+    for n in top_clusters:
+        tc = top_clusters[n]
+        top = [l[0] for l in sorted(tc.items(), key=operator.itemgetter(1), reverse=True)[:5]]
+        cluster_dict[n] = top
+        
+    # predict data onto test data by matching clusters
+    preds = []
+    for index, row in test_t.iterrows():
+        key = make_key([row[m] for m in match_cols])
+        if key in cluster_dict:
+            preds.append(cluster_dict[key])
+        else:
+            preds.append([])
+
+    # finding top clusters from hotel cluster
+    most_common_clusters = list(train.hotel_cluster.value_counts().head().index)
+
+    # Now finding clusters from 'user location ,region and hotel market where customer cam from
+    match_cols = ['user_location_country', 'user_location_region', 'user_location_city', 'hotel_market','orig_destination_distance']
+
+    groups = train.groupby(match_cols)
+    #combining all the predictors from search destination, hotel clusters and user location
+    exact_matches = []
+    #predicting on test data
+    for i in range(test_t.shape[0]):
+        exact_matches.append(generate_exact_matches(test_t.iloc[i], match_cols))
+    
+    full_preds = [f5(exact_matches[p] + preds[p] + most_common_clusters)[:5] for p in range(len(preds))]
+    
+
+    ct=metrics.mapk([[l] for l in test_t["hotel_cluster"]], full_preds, k=5)
+    print ct
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+    

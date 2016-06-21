@@ -1,0 +1,96 @@
+import pandas as pd
+import numpy as np
+import random
+from sklearn.decomposition import PCA
+from sklearn import cross_validation
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.base import TransformerMixin
+
+class DataFrameImputer(TransformerMixin):
+
+    def __init__(self):
+        """Impute missing values.
+
+        Columns of dtype object are imputed with the most frequent value 
+        in column.
+
+        Columns of other types are imputed with mean of column.
+
+        """
+    def fit(self, X, y=None):
+
+        self.fill = pd.Series([X[c].value_counts().index[0]
+            if X[c].dtype == np.dtype('O') else X[c].mean() for c in X],
+            index=X.columns)
+
+        return self
+
+    def transform(self, X, y=None):
+        return X.fillna(self.fill)
+
+
+
+
+
+def training_data(df):
+    df["srch_ci"] = pd.to_datetime(df["srch_ci"], format='%Y-%m-%d')
+    df["srch_co"] = pd.to_datetime(df["srch_co"], format='%Y-%m-%d')
+    df["stay_span"] = (df["srch_co"] - df["srch_ci"]).astype('timedelta64[h]')
+    
+    df=df.drop(df.columns[[0,7,11,12,24,25]], axis=1)
+    df = DataFrameImputer().fit_transform(df)
+    
+  
+    return df
+    
+
+
+destinations = pd.read_csv("destinations.csv")
+train = pd.read_csv("train1.csv")
+train["date_time"] = pd.to_datetime(train["date_time"])
+train["year"] = train["date_time"].dt.year
+train["month"] = train["date_time"].dt.month
+
+unique_users = train.user_id.unique()
+
+sel_user_ids = [unique_users[i] for i in sorted(random.sample(range(len(unique_users)), 45000)) ]
+sel_train = train[train.user_id.isin(sel_user_ids)]
+
+t1 = sel_train[((sel_train.year == 2013) | ((sel_train.year == 2014) & (sel_train.month < 8)))]
+t2 = sel_train[((sel_train.year == 2014) & (sel_train.month >= 8))]
+
+
+ct=training_data(t1)
+
+
+
+pca = PCA(n_components=3)
+dest_small = pca.fit_transform(destinations[["d{0}".format(i + 1) for i in range(149)]])
+dest_small = pd.DataFrame(dest_small)
+dest_small["srch_destination_id"] = destinations["srch_destination_id"]
+ct = ct.join(dest_small, on="srch_destination_id", how='left', rsuffix="dest")
+ct=ct.dropna()
+
+
+
+predictors = [c for c in ct.columns if c not in ["hotel_cluster"]]
+clf = RandomForestClassifier(n_estimators=10, min_weight_fraction_leaf=0.1)
+
+scores = cross_validation.cross_val_score(clf, ct[predictors], ct['hotel_cluster'], cv=3)
+
+print scores
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+    
